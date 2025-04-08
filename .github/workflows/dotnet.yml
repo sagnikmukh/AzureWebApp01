@@ -1,83 +1,69 @@
-name: Build and deploy ASP.Net Core app to Azure Web App
-
+name: "build-test-dev"
 on:
-  push:
-    branches: [ main ]
-    paths-ignore:
-      - '**.md'
   pull_request:
-    branches: [ main ]
-
-env:
-  DOTNET_VERSION: '7.0.x' # Azure App Services Deployment Center defaults to 3.1. Docs mention 5.x and 6.x, but 7.0.x works for as of today (Jan 2023)
-  DOTNET_QUALITY: 'preview'
-  WORKING_DIR: src
-  BUILD_CONFIG: Debug
-  PROJECT_FILE: AzureWebApp01.csproj # `dotnet publish` requires the does not work when specifying the .sln file
-  APPSERVICE_NAME: raztype
-  APPSERVICE_SLOT: Production
-  PACKAGE_PATH: '/publish' # Specifying '/' at the beginning of the path is required due to differences in action working-directory.
+    branches:
+      - dev
+    paths-ignore:
+      - '*.md'
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '*.md'
+  workflow_dispatch:
+    branches:
+      - dev
+      - arm64
+      - master
+    paths-ignore:
+      - '*.md'
+  
 
 jobs:
   build:
     runs-on: windows-latest
-    defaults:
-      run:
-        # Since the directory is not in root, specify working directory for the dotnet commands to work.
-        working-directory: $
-
     steps:
-      - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-      - name: Set up .NET 7.0.x
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: $
-          dotnet-quality: $
+    - name: Setup MSBuild (vswhere-path)
+      id: setup_msbuild_explicit
+      uses: ./
+      with:
+        vswhere-path: C:\ProgramData\chocolatey\bin
 
-      - name: Restore Dependencies
-        # Split build step to restore and build (with --no-restore)
-        run: dotnet restore
+    - name: Setup MSBuild (PATH)
+      id: setup_msbuild_path
+      uses: ./
 
-      - name: Build the .NET Solution
-        run: dotnet build -c $ --no-restore
+    - name: Setup MSBuild (fallback)
+      id: setup_msbuild_fallback
+      uses: ./
+      env:
+        PATH: ''
 
-      - name: Test
-        run: dotnet test --no-build --no-restore --verbosity normal
+    - name: Setup MSBuild (x64)
+      if: always()
+      id: setup_msbuild_path_x64
+      uses: ./
+      with:
+        vs-prerelease: true
+        msbuild-architecture: 'x64'
 
-      - name: dotnet publish
-        # Azure App Services defaults to '-o $/myapp'
-        run: dotnet publish -c $ -o $
+    - name: Setup MSBuild (arm64)
+      if: always()
+      id: setup_msbuild_path_arm
+      uses: ./
+      with:
+        vs-prerelease: true
+        msbuild-architecture: 'arm64'
 
-      - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v3
-        with:
-          name: .net-app
-          # Azure App Services defaults to $/myapp
-          path: $
+    - name: echo msbuild path
+      run: |
+        echo "vswhere-path: ${{ steps.setup_msbuild_explicit.outputs.msbuildPath }}"
+        echo "PATH: ${{ steps.setup_msbuild_path.outputs.msbuildPath }}"
+        echo "ARM PATH: ${{ steps.setup_msbuild_path_arm.outputs.msbuildPath }}"
+        echo "ARM PATH: ${{ steps.setup_msbuild_path_x64.outputs.msbuildPath }}"
+        echo "Fallback: ${{ steps.setup_msbuild_fallback.outputs.msbuildPath }}"
 
-  deploy:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: $
-    needs: build
-    environment:
-      name: 'Production'
-      url: $
-
-    steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v3
-        with:
-          name: .net-app
-
-      - name: Deploy to Azure Web App
-        id: deploy-to-webapp
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: $
-          slot-name: $
-          publish-profile: $
-          # Path = "." is the default and is the one that's working. The downloaded artifact does not contain the package folder of $PACKAGE_PATH
-          package: .
+    - name: echo MSBuild
+      run: msbuild -version
